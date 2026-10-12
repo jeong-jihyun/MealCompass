@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "com.jihyun.mealcompass"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.jihyun.mealcompass"
