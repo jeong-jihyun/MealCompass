@@ -6,6 +6,9 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
@@ -18,6 +21,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import androidx.exifinterface.media.ExifInterface
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -42,6 +47,12 @@ import java.net.URL
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.max
+import kotlin.math.roundToInt
+
+private const val CAL_NOTICE =
+    "※ 사진만으로는 양·재료·조리법을 알 수 없어 실제와 크게 다를 수 있어요. " +
+        "대략적인 참고용이며 진단·치료 조언이 아니에요."
 
 /** 건강 요약 (읽지 못한 항목은 null) */
 data class Health(val steps: Long?, val sleepMin: Long?, val avgHr: Long?) {
@@ -88,6 +99,23 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri -> if (uri != null) copyModel(uri) }
 
+    private val visionPicker = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) copyVisionModel(uri) }
+
+    private var pendingPhoto: Uri? = null
+
+    private val takePicture = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { ok ->
+        val u = pendingPhoto
+        if (ok && u != null) analyze(u) else clearPhotos()
+    }
+
+    private val pickImage = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> if (uri != null) analyze(uri) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
@@ -113,13 +141,16 @@ class MainActivity : ComponentActivity() {
         status = TextView(this).apply {
             textSize = 14f
             setPadding(0, dp(8), 0, dp(12))
-            text = "①②③ 설정 후 ④를 눌러요. (②는 없어도 기본 규칙으로 추천해요)"
+            text = "①②③ 설정 후 ④를 눌러요. (②는 없어도 기본 규칙으로 추천해요)\n" +
+                "⑤ 칼로리 보기는 ⑥ 모델이 없어도 음식 목록에서 고를 수 있어요."
         }
         col.addView(status)
         addButton(col, "① 건강 데이터 연결") { connectHealth() }
         addButton(col, "② 폰 안 AI 모델 파일 선택 (.task)") { modelPicker.launch(arrayOf("*/*")) }
         addButton(col, "③ 카카오 REST 키 입력") { askKakaoKey() }
         addButton(col, "④ 지금 메뉴 추천받기") { recommend() }
+        addButton(col, "⑤ 음식 사진으로 칼로리 보기") { showPhotoMenu() }
+        addButton(col, "⑥ 사진 분석용 AI 모델 선택 (Gemma-3n)") { visionPicker.launch(arrayOf("*/*")) }
         addButton(col, "동의 철회 및 저장된 설정 삭제") { withdraw() }
         result = TextView(this).apply {
             textSize = 15f
@@ -146,6 +177,7 @@ class MainActivity : ComponentActivity() {
                 "이 앱은 (1) 헬스 커넥트의 걸음 수·수면·심박을 읽고, (2) 현재 위치로 주변 식당을 찾아 메뉴를 추천해요.\n\n" +
                 "• 건강 데이터는 이 폰 안에서만 처리되고 밖으로 전송되지 않아요.\n" +
                 "• 식당 검색을 위해 현재 위치 좌표가 카카오 서버로 전송돼요.\n" +
+                "• 음식 사진은 이 폰 안에서만 분석하고, 분석이 끝나면 앱이 임시로 저장한 사진은 지워요.\n" +
                 "• 언제든 '동의 철회' 버튼으로 저장된 설정을 지울 수 있어요.\n" +
                 "• 추천은 일반적인 식습관 참고용이며 진단·치료 조언이 아니에요."
             )
@@ -161,6 +193,8 @@ class MainActivity : ComponentActivity() {
     private fun withdraw() {
         prefs.edit().clear().apply()
         File(filesDir, "model.task").delete()
+        visionModelFile().delete()
+        clearPhotos()
         llm?.close()
         llm = null
         Toast.makeText(this, "저장된 설정과 모델 파일을 삭제했어요", Toast.LENGTH_SHORT).show()
@@ -381,6 +415,139 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) { /* 아래 기본 규칙으로 */ }
         }
         return rulePick(h, places) to "기본 규칙 (AI 모델 미사용)"
+    }
+
+    // ---------------------------------------------------------------- 사진 칼로리
+
+    private fun visionModelFile() = File(filesDir, "vision.model")
+
+    private fun photosDir() = File(cacheDir, "photos").apply { mkdirs() }
+
+    private fun clearPhotos() {
+        photosDir().listFiles()?.forEach { it.delete() }
+    }
+
+    private fun copyVisionModel(uri: Uri) {
+        lifecycleScope.launch {
+            setStatus("사진 분석 모델 복사 중… (수 GB라 오래 걸릴 수 있어요)")
+            try {
+                withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)!!.use { input ->
+                        visionModelFile().outputStream().use { out -> input.copyTo(out) }
+                    }
+                }
+                setStatus("사진 분석 모델 저장 완료. ⑤로 사진을 분석해 보세요.")
+            } catch (e: Exception) {
+                visionModelFile().delete()
+                setStatus("모델 복사 실패: ${e.message}")
+            }
+        }
+    }
+
+    private fun showPhotoMenu() {
+        AlertDialog.Builder(this)
+            .setTitle("음식 사진으로 칼로리 보기")
+            .setItems(arrayOf("카메라로 찍기", "갤러리에서 고르기", "사진 없이 음식 목록에서 고르기")) { _, which ->
+                when (which) {
+                    0 -> launchCamera()
+                    1 -> pickImage.launch("image/*")
+                    else -> showFoodList()
+                }
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun launchCamera() {
+        try {
+            val file = File(photosDir(), "meal_${System.currentTimeMillis()}.jpg")
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            pendingPhoto = uri
+            takePicture.launch(uri)
+        } catch (e: Exception) {
+            setStatus("카메라 앱을 열 수 없어요: ${e.message}")
+        }
+    }
+
+    /** 사진을 한 변 768px 이하로 줄여서 읽고, 찍힌 방향대로 돌려 준다. */
+    private fun loadBitmap(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / sample > 768) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+            ?: return null
+        val degrees = try {
+            contentResolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees } ?: 0
+        } catch (e: Exception) { 0 }
+        if (degrees == 0) return bmp
+        val m = Matrix().apply { postRotate(degrees.toFloat()) }
+        return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    }
+
+    private fun analyze(uri: Uri) {
+        val model = visionModelFile()
+        if (!model.exists()) {
+            clearPhotos()
+            setStatus("사진 분석 모델(⑥)이 없어요. 대신 음식 목록에서 골라 볼게요.")
+            showFoodList()
+            return
+        }
+        lifecycleScope.launch {
+            result.text = "사진을 분석하는 중… (모델을 불러오느라 1분 가까이 걸릴 수 있어요)"
+            try {
+                val bmp = withContext(Dispatchers.IO) { loadBitmap(uri) }
+                    ?: error("사진을 읽지 못했어요")
+                // 메모리가 부족하지 않게 식당 추천용 작은 모델은 잠깐 내려 둔다
+                llm?.close()
+                llm = null
+                val raw = withContext(Dispatchers.Default) {
+                    VisionEstimator.estimate(this@MainActivity, model.absolutePath, bmp)
+                }
+                result.text = renderCalories(VisionEstimator.parse(raw), raw)
+            } catch (e: OutOfMemoryError) {
+                result.text = "메모리가 부족해요. 다른 앱을 닫고 다시 해 보거나 음식 목록에서 골라 주세요."
+            } catch (e: Exception) {
+                result.text = "분석 실패: ${e.message}\n음식 목록에서 직접 고를 수도 있어요."
+            } finally {
+                clearPhotos()
+                loadModel()
+            }
+        }
+    }
+
+    private fun renderCalories(items: List<FoodItem>, raw: String): String {
+        if (items.isEmpty()) {
+            return "음식을 알아보지 못했어요.\n\n모델 응답:\n${raw.take(300)}\n\n" +
+                "'사진 없이 음식 목록에서 고르기'를 이용해 보세요."
+        }
+        val sb = StringBuilder("사진 속 음식 추정 (폰 안 AI)\n\n")
+        items.forEach { sb.append("• ${it.name}: 약 ${it.kcal} kcal\n") }
+        sb.append("\n합계: 약 ${items.sumOf { it.kcal }} kcal\n\n").append(CAL_NOTICE)
+        return sb.toString()
+    }
+
+    private fun showFoodList() {
+        val foods = FoodTable.foods
+        AlertDialog.Builder(this)
+            .setTitle("음식을 골라 주세요")
+            .setItems(foods.map { it.name }.toTypedArray()) { _, i -> showPortion(foods[i]) }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    private fun showPortion(f: Food) {
+        val labels = arrayOf("적게 (0.7배)", "보통 (1배)", "많이 (1.3배)")
+        val ratios = doubleArrayOf(0.7, 1.0, 1.3)
+        AlertDialog.Builder(this)
+            .setTitle("${f.name}, 양은 어떤가요?")
+            .setItems(labels) { _, i ->
+                val kcal = (f.kcal * ratios[i] / 10).roundToInt() * 10
+                result.text = "${f.name} · ${labels[i]}\n약 $kcal kcal\n\n$CAL_NOTICE"
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     // ---------------------------------------------------------------- 추천 실행

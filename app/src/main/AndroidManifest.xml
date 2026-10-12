@@ -31,6 +31,17 @@
             </intent-filter>
         </activity>
 
+        <!-- 카메라 앱이 찍은 사진을 우리 앱 캐시에 저장할 수 있게 해 주는 통로 (CAMERA 권한은 필요 없음) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.jihyun.mealcompass.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Android 14 이상: 권한 사용 내역 화면 연결 -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"
