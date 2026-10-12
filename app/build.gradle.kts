@@ -43,5 +43,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
-    implementation("com.google.mediapipe:tasks-genai:0.10.27")
+    implementation("com.google.mediapipe:tasks-genai:0.10.35")
+    // MPImage/BitmapImageBuilder(사진을 모델에 넘기는 클래스)가 들어 있다. genai와 같은 버전으로 맞출 것
+    implementation("com.google.mediapipe:tasks-core:0.10.35")
 }
