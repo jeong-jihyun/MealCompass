@@ -18,7 +18,17 @@ jobs:
         with:
           gradle-version: '8.7'
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          tail -n 60 build.log
+          if [ $code -ne 0 ]; then
+            # 실패하면 핵심 오류 줄만 모아서 하나의 주석(Annotation)으로 남긴다
+            msg=$(grep -E "^e: |What went wrong|Execution failed|Could not |requires |compileSdk|AAR metadata|error:|^> |Caused by" build.log | head -40 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=Gradle 빌드 실패::${msg}"
+          fi
+          exit $code
       - uses: actions/upload-artifact@v4
         with:
           name: MealCompass-debug-apk
