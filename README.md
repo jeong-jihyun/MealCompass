@@ -40,3 +40,20 @@
 - MediaPipe LLM Inference는 구글이 유지보수 전용으로 분류한 상태입니다.
 - 1B 모델은 한국어가 약해서, 목록에서 번호를 고르게 하고 이유 한 줄만 받습니다.
 - 헬스 데이터가 없는 항목은 "정보 없음"으로 처리됩니다.
+
+## 파일 구성
+| 파일 | 역할 |
+| --- | --- |
+| `app/src/main/java/.../MainActivity.kt` | 화면(코드로 구성), 동의·철회, 헬스 커넥트 읽기, 카카오 식당 검색(반경 1km), 추천 |
+| `.../VisionEstimator.kt` | 음식 사진 → 칼로리 추정 (Gemma-3n, MediaPipe) |
+| `.../FoodTable.kt` | 모델이 없을 때 쓰는 음식 목록과 대략 칼로리 |
+| `app/src/main/AndroidManifest.xml` | 권한(위치, 헬스 커넥트 걸음·수면·심박), 카메라 사진용 FileProvider |
+| `.github/workflows/build.yml` | GitHub Actions에서 디버그 APK 빌드 (JDK 17, Gradle 8.11.1) |
+
+## 점검 기록 (2026-10)
+| 항목 | 결과 |
+| --- | --- |
+| README의 개인정보 설명 ↔ 코드 (동의 창, 동의 철회 시 모델 파일·설정 삭제, 임시 사진 삭제, 검색 반경 1000m) | 일치 |
+| 소스에 하드코딩된 API 키 | 없음 (카카오 키는 앱에서 입력받아 기기에 저장) |
+| 빌드·실행 | **미확인** (이 환경에서는 Android SDK와 Maven 저장소에 접근할 수 없음. 빌드는 위 Actions로 확인) |
+| 조치 | 빌드 결과물이 저장소에 섞이지 않도록 `.gitignore` 추가 |

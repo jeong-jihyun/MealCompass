@@ -1,0 +1,15 @@
+# Gradle / Android 빌드 결과
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
